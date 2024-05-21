@@ -17,7 +17,7 @@ install_requires = [
     #
     # * https://github.com/zenhack/simp_le/issues/62
     # * https://github.com/pypa/pip/issues/988
-    'idna<2.8',
+    'idna',
 
     'acme>=2.0,<3.0',
     'cryptography',
