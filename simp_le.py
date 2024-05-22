@@ -1538,7 +1538,7 @@ def revoke(args):
 
 def setup_logging(verbose):
     """Setup basic logging."""
-    level = logging.DEBUG if verbose else logging.INFO
+    level = logging.DEBUG if verbose else logging.WARNING
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
     handler = logging.StreamHandler()
