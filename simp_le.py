@@ -18,6 +18,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 """Simple Let's Encrypt client."""
+from unittest import mock
 import abc
 import argparse
 import collections
@@ -43,7 +44,6 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 import josepy as jose
-import mock
 import OpenSSL
 import pytz
 

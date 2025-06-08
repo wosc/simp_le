@@ -23,7 +23,6 @@ install_requires = [
     'cryptography',
     # formerly known as acme.jose:
     'josepy',
-    'mock',
     'pyOpenSSL',
     'pytz',
 ]
