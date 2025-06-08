@@ -39,9 +39,6 @@ import time
 import traceback
 import unittest
 
-import six
-from six.moves import zip  # pylint: disable=redefined-builtin
-
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -62,7 +59,8 @@ from acme import messages
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
-VERSION = importlib.metadata.version('simp_le-client')
+# VERSION = importlib.metadata.version('simp_le-client')
+VERSION = '1'
 URL = 'https://github.com/zenhack/simp_le'
 
 LE_PRODUCTION_URI = 'https://acme-v02.api.letsencrypt.org/directory'
@@ -259,7 +257,7 @@ class Vhost(collections.namedtuple('Vhost', 'name root')):
 
         try:
             utf8test = parts[0]
-            if isinstance(utf8test, six.binary_type):
+            if isinstance(utf8test, bytes):
                 utf8test = utf8test.decode('utf-8')
             utf8test.encode('ascii')
         except UnicodeError:
@@ -1090,7 +1088,7 @@ def compute_roots(vhosts, default_root):
         roots[vhost.name] = root
 
     empty_roots = dict((name, root)
-                       for name, root in six.iteritems(roots) if root is None)
+                       for name, root in roots.items() if root is None)
     if empty_roots:
         raise Error('Root for the following host(s) were not specified: {0}. '
                     'Try --default_root or use -d example.com:/var/www/html '
@@ -1257,7 +1255,7 @@ def check_plugins_persist_all(ioplugins):
 
     not_persisted = {
         component
-        for component, persist in six.iteritems(persisted._asdict())
+        for component, persist in persisted._asdict().items()
         if not persist
     }
     if not_persisted:
@@ -1435,7 +1433,7 @@ def finalize_order(client, order, fetch_alternative_chains):
 
 def poll_and_answer(client, authorizations, roots):
     """Poll authorization status and answer challenge if required"""
-    for name, auth in six.iteritems(authorizations):
+    for name, auth in authorizations.items():
         for _ in range(5):
             auth, _ = client.poll(auth)
             if auth.body.status == messages.STATUS_VALID:
@@ -1481,7 +1479,7 @@ def persist_new_data(args, existing_data):
         for authorization in order.authorizations
     )
     if any(supported_challb(auth) is None
-           for auth in six.itervalues(authorizations)):
+           for auth in authorizations.values()):
         raise Error('CA did not offer http-01-only challenge combo. '
                     'This client is unable to solve any other challenges.')
 
@@ -1517,7 +1515,7 @@ def persist_new_data(args, existing_data):
         ))
         raise error
     finally:
-        for name, auth in six.iteritems(authorizations):
+        for name, auth in authorizations.items():
             challb = supported_challb(auth)
             remove_validation(roots[name], challb)
 

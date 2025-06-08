@@ -26,7 +26,6 @@ install_requires = [
     'mock',
     'pyOpenSSL',
     'pytz',
-    'six',
 ]
 
 tests_require = [
