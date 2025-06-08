@@ -40,12 +40,12 @@ import time
 import traceback
 import unittest
 
-from cryptography.hazmat.backends import default_backend
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
 
 import josepy as jose
-import OpenSSL
-import pytz
 
 from acme import client as acme_client
 from acme import crypto_util
@@ -59,8 +59,7 @@ from acme import messages
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
-# VERSION = importlib.metadata.version('simp_le-client')
-VERSION = '1'
+VERSION = importlib.metadata.version('simp_le-client')
 URL = 'https://github.com/zenhack/simp_le'
 
 LE_PRODUCTION_URI = 'https://acme-v02.api.letsencrypt.org/directory'
@@ -111,7 +110,7 @@ def gen_pkey(bits):
     """Generate a private key.
 
     >>> gen_pkey(1024)
-    <OpenSSL.crypto.PKey object at 0x...>
+    <cryptography...RSAPrivateKey object at 0x...>
 
     Args:
       bits: Bit size of the key.
@@ -120,16 +119,15 @@ def gen_pkey(bits):
       Freshly generated private key.
     """
     assert bits >= 1024
-    pkey = OpenSSL.crypto.PKey()
-    pkey.generate_key(OpenSSL.crypto.TYPE_RSA, bits)
-    return pkey
+    return rsa.generate_private_key(
+        public_exponent=65537, key_size=bits)
 
 
-def gen_csr(pkey, domains, sig_hash='sha256'):
+def gen_csr(pkey, domains):
     """Generate a CSR.
 
-    >>> [str(domain) for domain in crypto_util._pyopenssl_cert_or_req_san(
-    ...     gen_csr(gen_pkey(1024), [b'example.com', b'example.net']))]
+    >>> [str(domain) for domain in cert_or_req_san(
+    ...     gen_csr(gen_pkey(1024), ['example.com', 'example.net']))]
     ['example.com', 'example.net']
 
     Args:
@@ -141,86 +139,11 @@ def gen_csr(pkey, domains, sig_hash='sha256'):
       Generated CSR.
     """
     assert domains, 'Must provide one or more hostnames for the CSR.'
-    req = OpenSSL.crypto.X509Req()
-    req.add_extensions([
-        OpenSSL.crypto.X509Extension(
-            b'subjectAltName',
-            critical=False,
-            value=b', '.join(b'DNS:' + d for d in domains)
-        ),
-    ])
-    req.set_pubkey(pkey)
-
-    req.set_version(0)
-
-    req.sign(pkey, sig_hash)
-    return req
-
-
-class ComparablePKey:  # pylint: disable=too-few-public-methods
-    """Comparable key.
-
-    Suppose you have the following keys with the same material:
-
-    >>> pem = OpenSSL.crypto.dump_privatekey(
-    ...     OpenSSL.crypto.FILETYPE_PEM, gen_pkey(1024))
-    >>> k1 = OpenSSL.crypto.load_privatekey(OpenSSL.crypto.FILETYPE_PEM, pem)
-    >>> k2 = OpenSSL.crypto.load_privatekey(OpenSSL.crypto.FILETYPE_PEM, pem)
-
-    Unfortunately, in pyOpenSSL, equality is not well defined:
-
-    >>> k1 == k2
-    False
-
-    Using `ComparablePKey` you get the equality relation right:
-
-    >>> ck1, ck2 = ComparablePKey(k1), ComparablePKey(k2)
-    >>> other_ckey = ComparablePKey(gen_pkey(1024))
-    >>> ck1 == ck2
-    True
-    >>> ck1 == k1
-    False
-    >>> k1 == ck1
-    False
-    >>> other_ckey == ck1
-    False
-
-    Non-equalty is also well defined:
-
-    >>> ck1 != ck2
-    False
-    >>> ck1 != k1
-    True
-    >>> k1 != ck1
-    True
-    >>> k1 != other_ckey
-    True
-    >>> other_ckey != ck1
-    True
-
-    Wrapepd key is available as well:
-
-    >>> ck1.wrapped is k1
-    True
-
-    Internal implementation is not optimized for performance!
-    """
-
-    def __init__(self, wrapped):
-        self.wrapped = wrapped
-
-    def __ne__(self, other):
-        return not self == other  # pylint: disable=unneeded-not
-
-    def _dump(self):
-        return OpenSSL.crypto.dump_privatekey(
-            OpenSSL.crypto.FILETYPE_ASN1, self.wrapped)
-
-    def __eq__(self, other):
-        if not isinstance(other, self.__class__):
-            return NotImplemented
-        # pylint: disable=protected-access
-        return self._dump() == other._dump()
+    return x509.CertificateSigningRequestBuilder().subject_name(
+        x509.Name([])
+    ).add_extension(x509.SubjectAlternativeName([
+        x509.DNSName(x) for x in domains
+    ]), critical=False).sign(pkey, hashes.SHA256())
 
 
 class Vhost(collections.namedtuple('Vhost', 'name root')):
@@ -293,9 +216,9 @@ class IOPlugin:
     - for `account_key`: private account key, an instance of `acme.jose.JWK`
     - for `account_reg`: account registration info, an instance of
     `acme.messages.RegistrationResource`
-    - for `key`: private key, an instance of `OpenSSL.crypto.PKey`
-    - for `cert`: certificate, an instance of `OpenSSL.crypto.X509`
-    - for `chain`: certificate chain, a list of `OpenSSL.crypto.X509` instances
+    - for `key`: private key, an instance of `cryptography:RSAPrivateKey`
+    - for `cert`: certificate, an instance of `cryptography.x509.Certificate`
+    - for `chain`: certificate chain, a list of `cryptography.x509.Certifciate` instances
     """
 
     EMPTY_DATA = Data(
@@ -429,42 +352,29 @@ class JSONIOPlugin(IOPlugin):  # pylint: disable=abstract-method
         return json.json_dumps()
 
 
-class OpenSSLIOPlugin(IOPlugin):  # pylint: disable=abstract-method
-    """IOPlugin that uses pyOpenSSL.
-
-    Args:
-      typ: One of `OpenSSL.crypto.FILETYPE_*`, used in loading/dumping.
-    """
-
-    def __init__(self, typ=OpenSSL.crypto.FILETYPE_PEM, **kwargs):
-        self.typ = typ
-        super(OpenSSLIOPlugin, self).__init__(**kwargs)
-
+class CryptographyIOPlugin(IOPlugin):
     def load_key(self, data):
-        """Load private key."""
         try:
-            key = OpenSSL.crypto.load_privatekey(self.typ, data)
-        except OpenSSL.crypto.Error:
+            return serialization.load_pem_private_key(data, None)
+        except Exception:
             raise Error("simp_le couldn't load a key from {0}; the "
                         "file might be empty or corrupt.".format(self.path))
-        return ComparablePKey(key)
 
-    def dump_key(self, data):
-        """Dump private key."""
-        return OpenSSL.crypto.dump_privatekey(self.typ, data.wrapped).strip()
+    def dump_key(self, obj):
+        return obj.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption())
 
     def load_cert(self, data):
-        """Load certificate."""
         try:
-            cert = OpenSSL.crypto.load_certificate(self.typ, data)
-        except OpenSSL.crypto.Error:
+            return x509.load_pem_x509_certificate(data)
+        except Exception:
             raise Error("simp_le couldn't load a certificate from {0}; the "
                         "file might be empty or corrupt.".format(self.path))
-        return jose.ComparableX509(cert)
 
-    def dump_cert(self, data):
-        """Dump certificate."""
-        return OpenSSL.crypto.dump_certificate(self.typ, data.wrapped).strip()
+    def dump_cert(self, obj):
+        return obj.public_bytes(serialization.Encoding.PEM)
 
 
 @IOPlugin.register(path='account_key.json')
@@ -529,9 +439,8 @@ class AccountRegistration(FileIOPlugin, JSONIOPlugin):
         return self.save_to_file(reg)
 
 
-@IOPlugin.register(path='key.der', typ=OpenSSL.crypto.FILETYPE_ASN1)
-@IOPlugin.register(path='key.pem', typ=OpenSSL.crypto.FILETYPE_PEM)
-class KeyFile(FileIOPlugin, OpenSSLIOPlugin):
+@IOPlugin.register(path='key.pem')
+class KeyFile(FileIOPlugin, CryptographyIOPlugin):
     """Private key file plugin."""
 
     def persisted(self):
@@ -557,9 +466,8 @@ class KeyFile(FileIOPlugin, OpenSSLIOPlugin):
         return self.save_to_file(key)
 
 
-@IOPlugin.register(path='cert.der', typ=OpenSSL.crypto.FILETYPE_ASN1)
-@IOPlugin.register(path='cert.pem', typ=OpenSSL.crypto.FILETYPE_PEM)
-class CertFile(FileIOPlugin, OpenSSLIOPlugin):
+@IOPlugin.register(path='cert.pem')
+class CertFile(FileIOPlugin, CryptographyIOPlugin):
     """Certificate file plugin."""
 
     def persisted(self):
@@ -585,8 +493,8 @@ class CertFile(FileIOPlugin, OpenSSLIOPlugin):
         return self.save_to_file(cert)
 
 
-@IOPlugin.register(path='chain.pem', typ=OpenSSL.crypto.FILETYPE_PEM)
-class ChainFile(FileIOPlugin, OpenSSLIOPlugin):
+@IOPlugin.register(path='chain.pem')
+class ChainFile(FileIOPlugin, CryptographyIOPlugin):
     """Certificate chain plugin."""
 
     def persisted(self):
@@ -616,8 +524,8 @@ class ChainFile(FileIOPlugin, OpenSSLIOPlugin):
         return self.save_to_file(_PEMS_SEP.join(pems))
 
 
-@IOPlugin.register(path='fullchain.pem', typ=OpenSSL.crypto.FILETYPE_PEM)
-class FullChainFile(FileIOPlugin, OpenSSLIOPlugin):
+@IOPlugin.register(path='fullchain.pem')
+class FullChainFile(FileIOPlugin, CryptographyIOPlugin):
     """Full chain file plugin."""
 
     def persisted(self):
@@ -649,8 +557,8 @@ class FullChainFile(FileIOPlugin, OpenSSLIOPlugin):
         return self.save_to_file(_PEMS_SEP.join(pems))
 
 
-@IOPlugin.register(path='full.pem', typ=OpenSSL.crypto.FILETYPE_PEM)
-class FullFile(FileIOPlugin, OpenSSLIOPlugin):
+@IOPlugin.register(path='full.pem')
+class FullFile(FileIOPlugin, CryptographyIOPlugin):
     """Private key, certificate and chain plugin."""
 
     def persisted(self):
@@ -756,18 +664,15 @@ class PluginIOTestMixin:
     def __init__(self, *args, **kwargs):
         super(PluginIOTestMixin, self).__init__(*args, **kwargs)
 
-        raw_key = gen_pkey(1024)
+        key = gen_pkey(1024)
         self.all_data = IOPlugin.Data(
-            account_key=jose.JWKRSA(key=rsa.generate_private_key(
-                public_exponent=65537, key_size=1024,
-                backend=default_backend(),
-            )),
+            account_key=jose.JWKRSA(key=gen_pkey(1024)),
             account_reg=messages.NewRegistration.from_data(),
-            key=ComparablePKey(raw_key),
-            cert=jose.ComparableX509(crypto_util.gen_ss_cert(raw_key, ['a'])),
+            key=key,
+            cert=crypto_util.make_self_signed_cert(key, ['a']),
             chain=[
-                jose.ComparableX509(crypto_util.gen_ss_cert(raw_key, ['b'])),
-                jose.ComparableX509(crypto_util.gen_ss_cert(raw_key, ['c'])),
+                crypto_util.make_self_signed_cert(key, ['b']),
+                crypto_util.make_self_signed_cert(key, ['c']),
             ],
         )
         self.key_data = IOPlugin.EMPTY_DATA._replace(key=self.all_data.key)
@@ -820,6 +725,13 @@ class KeyFileTest(FileIOPluginTestMixin, UnitTestCase):
     # this is a test suite | pylint: disable=missing-docstring
     PLUGIN_CLS = KeyFile
 
+    def test_save_ignore_unpersisted(self):
+        # Can only compare RSAKey by comparing the raw bytes.
+        self.plugin.save(self.all_data)
+        saved = self.plugin.load().key
+        expected = self.all_data.key
+        self.assertEqual(self.plugin.dump_key(expected), self.plugin.dump_key(saved))
+
 
 class CertFileTest(FileIOPluginTestMixin, UnitTestCase):
     """Tests for CertFile."""
@@ -843,6 +755,16 @@ class FullFileTest(ChainFileIOPluginTestMixin, UnitTestCase):
     """Tests for FullFile."""
     # this is a test suite | pylint: disable=missing-docstring
     PLUGIN_CLS = FullFile
+
+    def test_save_ignore_unpersisted(self):
+        self.plugin.save(self.all_data)
+        # Key save/load already tested in KeyFileTest.
+        saved = self.plugin.load()._replace(key=None)
+        expected = IOPlugin.Data(
+            *(data if persist else None for persist, data in
+              zip(self.plugin.persisted(), self.all_data)))
+        expected = expected._replace(key=None)
+        self.assertEqual(expected, saved)
 
 
 class PortNumWarningTest(UnitTestCase):
@@ -1158,44 +1080,18 @@ def persist_data(args, existing_data, new_data):
             plugin.save(new_data)
 
 
-def asn1_generalizedtime_to_dt(timestamp):
-    """Convert ASN.1 GENERALIZEDTIME to datetime.
-
-    Useful for deserialization of `OpenSSL.crypto.X509.get_notAfter` and
-    `OpenSSL.crypto.X509.get_notAfter` outputs.
-
-    TODO: Implement remaining two formats: *+hhmm, *-hhmm.
-
-    >>> asn1_generalizedtime_to_dt('201511150803Z')
-    datetime.datetime(2015, 11, 15, 8, 0, 3, tzinfo=<UTC>)
-    >>> asn1_generalizedtime_to_dt('201511150803+1512')
-    datetime.datetime(2015, 11, 15, 8, 0, 3, tzinfo=pytz.FixedOffset(912))
-    >>> asn1_generalizedtime_to_dt('201511150803-1512')
-    datetime.datetime(2015, 11, 15, 8, 0, 3, tzinfo=pytz.FixedOffset(-912))
-    """
-    dt = datetime.datetime.strptime(  # pylint: disable=invalid-name
-        timestamp[:12], '%Y%m%d%H%M%S')
-    if timestamp.endswith('Z'):
-        tzinfo = pytz.utc
-    else:
-        sign = -1 if timestamp[-5] == '-' else 1
-        tzinfo = pytz.FixedOffset(
-            sign * (int(timestamp[-4:-2]) * 60 + int(timestamp[-2:])))
-    return tzinfo.localize(dt)
-
-
 def renewal_necessary(cert, valid_min):
     """Is renewal necessary?
 
-    >>> cert = crypto_util.gen_ss_cert(
-    ...     gen_pkey(1024), ['example.com'], validity=(60 *60))
+    >>> cert = crypto_util.make_self_signed_cert(
+    ...     gen_pkey(1024), ['example.com'], validity=datetime.timedelta(minutes=1))
     >>> renewal_necessary(cert, 60 * 60 * 24)
     True
     >>> renewal_necessary(cert, 1)
     False
     """
-    now = pytz.utc.localize(datetime.datetime.utcnow())
-    expiry = asn1_generalizedtime_to_dt(cert.get_notAfter().decode())
+    now = datetime.datetime.now(datetime.timezone.utc)
+    expiry = cert.not_valid_after_utc
     diff = expiry - now
     logger.debug('Certificate expires in %s on %s (relative to %s)',
                  diff, expiry, now)
@@ -1303,12 +1199,12 @@ def load_existing_data(ioplugins):
     return all_existing
 
 
-def pyopenssl_cert_or_req_san(cert):
-    """SANs from cert or csr."""
-    # This function is not inlined mainly because pylint is bugged
-    # when it comes to locally disabling protected access...
-    # pylint: disable=protected-access
-    return crypto_util._pyopenssl_cert_or_req_san(cert)
+def cert_or_req_san(cert):
+    try:
+        san_ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+        return san_ext.value.get_values_for_type(x509.DNSName)
+    except x509.ExtensionNotFound:
+        return []
 
 
 def valid_existing_cert(cert, vhosts, valid_min):
@@ -1319,8 +1215,8 @@ def valid_existing_cert(cert, vhosts, valid_min):
     >>> valid_existing_cert(cert=None, vhosts=[], valid_min=0)
     False
 
-    >>> cert = jose.ComparableX509(crypto_util.gen_ss_cert(
-    ...     gen_pkey(1024), ['example.com'], validity=(60 *60)))
+    >>> cert = crypto_util.make_self_signed_cert(
+    ...     gen_pkey(1024), ['example.com'], validity=datetime.timedelta(minutes=1))
 
     Return True iff `valid_min` is not bigger than certificate lifespan:
 
@@ -1341,7 +1237,7 @@ def valid_existing_cert(cert, vhosts, valid_min):
 
     # renew existing?
     new_sans = [vhost.name for vhost in vhosts]
-    existing_sans = pyopenssl_cert_or_req_san(cert.wrapped)
+    existing_sans = cert_or_req_san(cert)
     logger.debug('Existing SANs: %r, new: %r', existing_sans, new_sans)
     return (set(existing_sans) == set(new_sans)
             and not renewal_necessary(cert, valid_min))
@@ -1353,8 +1249,7 @@ def check_or_generate_account_key(args, existing):
         logger.info('Generating new account key')
         return jose.JWKRSA(key=rsa.generate_private_key(
             public_exponent=args.account_key_public_exponent,
-            key_size=args.account_key_size,
-            backend=default_backend(),
+            key_size=args.account_key_size
         ))
     return existing
 
@@ -1463,16 +1358,10 @@ def persist_new_data(args, existing_data):
         key = existing_data.key
     else:
         logger.info('Generating new certificate private key')
-        key = ComparablePKey(gen_pkey(args.cert_key_size))
+        key = gen_pkey(args.cert_key_size)
 
-    csr = gen_csr(
-        key.wrapped, [vhost.name.encode() for vhost in args.vhosts]
-    )
-    csr = OpenSSL.crypto.dump_certificate_request(
-        OpenSSL.crypto.FILETYPE_PEM, csr
-    )
-
-    order = client.new_order(csr)
+    csr = gen_csr(key, [vhost.name for vhost in args.vhosts])
+    order = client.new_order(csr.public_bytes(serialization.Encoding.PEM))
 
     authorizations = dict(
         [authorization.body.identifier.value, authorization]
@@ -1497,11 +1386,9 @@ def persist_new_data(args, existing_data):
             account_key=client.net.key,
             account_reg=client.net.account,
             key=key,
-            cert=jose.ComparableX509(OpenSSL.crypto.load_certificate(
-                OpenSSL.crypto.FILETYPE_PEM, pems[0])),
+            cert=x509.load_pem_x509_certificate(pems[0]),
             chain=[
-                jose.ComparableX509(OpenSSL.crypto.load_certificate(
-                    OpenSSL.crypto.FILETYPE_PEM, pem))
+                x509.load_pem_x509_certificate(pem)
                 for pem in pems[1:]
             ],
         ))

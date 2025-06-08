@@ -19,12 +19,9 @@ install_requires = [
     # * https://github.com/pypa/pip/issues/988
     'idna',
 
-    'acme>=2.0',
+    'acme>=4.0',
     'cryptography',
-    # formerly known as acme.jose:
     'josepy',
-    'pyOpenSSL',
-    'pytz',
 ]
 
 tests_require = [
