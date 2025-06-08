@@ -25,6 +25,7 @@ import contextlib
 import datetime
 import doctest
 import hashlib
+import importlib.metadata
 import errno
 import logging
 import os
@@ -37,8 +38,6 @@ import tempfile
 import time
 import traceback
 import unittest
-
-import pkg_resources
 
 import six
 from six.moves import zip  # pylint: disable=redefined-builtin
@@ -63,7 +62,7 @@ from acme import messages
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
-VERSION = pkg_resources.require('simp_le-client')[0].version
+VERSION = importlib.metadata.version('simp_le-client')
 URL = 'https://github.com/zenhack/simp_le'
 
 LE_PRODUCTION_URI = 'https://acme-v02.api.letsencrypt.org/directory'
