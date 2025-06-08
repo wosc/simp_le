@@ -25,9 +25,9 @@ import collections
 import contextlib
 import datetime
 import doctest
+import errno
 import hashlib
 import importlib.metadata
-import errno
 import logging
 import os
 import re
