@@ -1,0 +1,30 @@
+[project]
+name = "simp-le-client"
+description = "Simple Let's Encrypt Client"
+version = "2.0"
+
+dependencies = [
+  "acme>=4.0",
+  "cryptography",
+  "josepy",
+]
+optional-dependencies = {test=[
+  "pycodestyle",
+  "pylint",
+]}
+
+authors = [{name="Ian Denhardt", email="ian@zenhack.net"}]
+license = {text="GPLv3"}
+urls = {Repository="https://github.com/wosc/simp_le"}
+requires-python = ">=3.7"
+
+[project.scripts]
+simp_le = "simp_le:main"
+
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+include = ["simp_le.py"]
